@@ -56,10 +56,8 @@ var PackagesBuilt int
 var PackagesInstalled int
 var BrokenPackages int
 var ListedTargets int
-var ListedDirs, ValidatedDirs map[string]bool
+var ListedDirs map[string]bool
 var ListedPkgs []*Package
-
-var TestArgs []string
 
 var BrokenMsg []string
 var ReturnFailCode bool
@@ -70,23 +68,7 @@ var RunningInGOPATH string
 var buildBlock chan bool
 var Packages = make(map[string]*Package)
 
-var ErrLog = log.New(os.Stderr, "gb error: ", 0)
-
-/*
- gb doesn't know how to build these packages
- 
- math has both pure go and asm versions of many functions, and which is used depends
- on the architexture
- 
- go/build has a source-generation step that uses make variables
-
- os has source generation
- */
-var ForceMakePkgs = map[string]bool {
-	"math": true,
-	"go/build": true,
-	"os": true,
-}
+var ErrLog = log.New(os.Stderr, "gb error:", 0)
 
 func ScanDirectory(base, dir string) (err2 os.Error) {
 	_, basedir := path.Split(dir)
@@ -120,9 +102,7 @@ func ScanDirectory(base, dir string) (err2 os.Error) {
 			key += "-cmd"
 		}
 		if dup, exists := Packages[key]; exists {
-			if GetAbs(dup.Dir, CWD) != GetAbs(pkg.Dir, CWD) {
-				ErrLog.Printf("Duplicate target: %s\n in %s\n in %s\n", pkg.Target, dup.Dir, pkg.Dir)
-			}
+			ErrLog.Printf("Duplicate target: %s\n in %s\n in %s\n", pkg.Target, dup.Dir, pkg.Dir)
 		} else {
 			Packages[key] = pkg
 		}
@@ -154,19 +134,6 @@ func ScanDirectory(base, dir string) (err2 os.Error) {
 	return
 }
 
-func ValidateDir(name string) {
-	if Exclusive {
-		ValidatedDirs[name] = true
-		return
-	}
-	for lt := range ListedDirs {
-		rel := GetRelative(lt, name, CWD)
-		if !HasPathPrefix(rel, "..") {
-			ValidatedDirs[lt] = true
-		}
-	}
-}
-
 func IsListed(name string) bool {
 	if ListedTargets == 0 {
 		return true
@@ -180,6 +147,11 @@ func IsListed(name string) bool {
 		if !HasPathPrefix(rel, "..") {
 			return true
 		}
+		/*
+			if HasPathPrefix(name, lt) {
+				return true
+			}
+		*/
 	}
 	return false
 }
@@ -421,7 +393,6 @@ func RunGB() (err os.Error) {
 	DoPkgs, DoCmds = DoPkgs || (!DoPkgs && !DoCmds), DoCmds || (!DoPkgs && !DoCmds)
 
 	ListedDirs = make(map[string]bool)
-	ValidatedDirs = make(map[string]bool)
 
 	args := os.Args[1:len(os.Args)]
 
@@ -462,19 +433,8 @@ func RunGB() (err os.Error) {
 		if !RunningInGOROOT && pkg.IsInGOROOT {
 			continue
 		}
-		if RunningInGOPATH == "" && pkg.IsInGOPATH != "" {
-			continue
-		}
 		if IsListed(pkg.Dir) {
 			ListedPkgs = append(ListedPkgs, pkg)
-			ValidateDir(pkg.Dir)
-		}
-	}
-
-	for lt := range ListedDirs {
-		if !ValidatedDirs[lt] {
-			err = os.NewError(fmt.Sprintf("Listed directory %q doesn't correspond to a known package", lt))
-			return
 		}
 	}
 
@@ -560,13 +520,9 @@ func RunGB() (err os.Error) {
 }
 
 func CheckFlags() bool {
-	for _, arg := range os.Args[1:] {
-		if strings.HasPrefix(arg, "-test.") {
-			TestArgs = append(TestArgs, arg)
-			continue
-		}
+	for _, arg := range os.Args[1:len(os.Args)] {
 		if len(arg) > 0 && arg[0] == '-' {
-			for _, flag := range arg[1:] {
+			for _, flag := range arg[1:len(arg)] {
 				switch flag {
 				case 'i':
 					Install = true

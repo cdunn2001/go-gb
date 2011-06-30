@@ -70,7 +70,6 @@ type Package struct {
 	CGoLDFlags map[string][]string
 
 	HasMakefile bool
-	MustUseMakefile bool
 	IsInGOROOT  bool
 	IsInGOPATH string
 
@@ -86,7 +85,6 @@ func NewPackage(base, dir string) (this *Package, err os.Error) {
 		err = os.NewError("not a directory")
 		return
 	}
-
 
 	this = new(Package)
 	this.block = make(chan bool, 1)
@@ -134,11 +132,6 @@ func NewPackage(base, dir string) (this *Package, err os.Error) {
 		this.HasMakefile = true
 	}
 
-	if !this.HasMakefile && this.IsInGOROOT {
-		err = os.NewError("GOROOT pkg without makefile - not meant to be built")
-		return
-	}
-
 	if len(this.Sources) == 0 {
 		err = os.NewError("no source")
 		return
@@ -162,17 +155,6 @@ func NewPackage(base, dir string) (this *Package, err os.Error) {
 	this.IsCmd = this.Name == "main"
 	this.Objects = append(this.Objects, path.Join(this.Dir, GetIBName()))
 	err = this.GetTarget()
-	
-	if !FilterPkg(this.Target) {
-		err = os.NewError("Filtered package based on GOOS/GOARCH")
-		return
-	}
-	
-	if this.IsCmd && this.IsCGo {
-		err = os.NewError(fmt.Sprintf("(in %s) cannot have a cgo cmd", this.Dir))
-		ErrLog.Println(err)
-		return
-	}
 
 	this.Active = (DoCmds && this.IsCmd) || (DoPkgs && !this.IsCmd)
 
@@ -286,11 +268,11 @@ func (this *Package) VisitFile(fpath string, f *os.FileInfo) {
 		return
 	}
 
-	//no longer necessary since this goes into the _test dir
+	/* //no longer necessary since this goes into the _test dir
 	if strings.HasSuffix(fpath, "_testmain.go") {
 		return
 	}
-	
+	*/
 	rootl := len(this.Dir) + 1
 	if this.Dir != "." {
 		fpath = fpath[rootl:len(fpath)]
@@ -360,7 +342,6 @@ func (this *Package) GetSourceDeps() (err os.Error) {
 			}
 		}
 		if isCGoSrc {
-			this.SrcDeps[src] = append(this.SrcDeps[src], "\"runtime/cgo\"")
 			this.CGoSources = append(this.CGoSources, src)
 			this.PkgCGoSrc[fpkg] = append(this.PkgCGoSrc[fpkg], src)
 		} else {
@@ -382,12 +363,7 @@ func (this *Package) GetSourceDeps() (err os.Error) {
 		this.Deps = append(this.Deps, this.SrcDeps[buildSrc]...)
 	}
 
-	for _, buildSrc := range this.PkgCGoSrc[this.Name] {
-		this.Deps = append(this.Deps, this.SrcDeps[buildSrc]...)
-	}
-
 	this.Deps = RemoveDups(this.Deps)
-	
 	if Test {
 		for _, src := range this.TestSources {
 			var fpkg, ftarget string
@@ -420,29 +396,17 @@ func (this *Package) GetSourceDeps() (err os.Error) {
 func (this *Package) GetTarget() (err os.Error) {
 	if !this.IsCmd && this.IsInGOROOT {
 		//always the relative path
-		this.Target = GetRelative(path.Join(GOROOT, "src", "cmd"), this.Dir, CWD)
-		if !strings.HasPrefix(this.Target, "..") {
-			if this.IsCGo {
-				err = os.NewError("gb can't compile the GOROOT c cmds")
-				return
-			}
-			this.IsCmd = true
-			this.MustUseMakefile = true
-		}
-	}
-	if !this.IsCmd && this.IsInGOROOT {
-		//always the relative path
 		this.Target = GetRelative(path.Join(GOROOT, "src", "pkg"), this.Dir, CWD)
 		if strings.HasPrefix(this.Target, "..") {
-			//if _, ok := this.PkgSrc["documentation"]; !ok && len(this.PkgSrc)==1 {
 			err = os.NewError(fmt.Sprintf("(in %s) GOROOT pkg is not in $GOROOT/src/pkg", this.Dir))
 			ErrLog.Println(err)
 			return
 		}
+
 		//fmt.Printf("found goroot relative path for %s = %s\n", this.Dir, this.Target)
 	} else if !this.IsCmd && this.IsInGOPATH != "" {
 		//this is a gopath target
-		this.Target = GetRelative(path.Join(this.IsInGOPATH, "src"), this.Dir, CWD)
+		this.Target = GetRelative(path.Join(this.IsInGOPATH, "src", "pkg"), this.Dir, CWD)
 		if strings.HasPrefix(this.Target, "..") {
 			err = os.NewError(fmt.Sprintf("(in %s) GOPATH pkg is not in $GOPATH/src/pkg for GOPATH=%s", this.Dir, this.IsInGOPATH))
 			ErrLog.Println(err)
@@ -518,10 +482,6 @@ func (this *Package) GetTarget() (err os.Error) {
 		}
 	}
 
-	if this.IsInGOROOT && ForceMakePkgs[this.Target] {
-		this.MustUseMakefile = true
-	}
-
 	this.Stat()
 
 	return
@@ -552,13 +512,11 @@ func (this *Package) PrintScan() {
 	} else {
 		label = "pkg"
 	}
-	if this.IsCGo && !this.IsCmd{
+	if this.IsCGo {
 		label = "cgo"
 	}
 	if this.IsInGOROOT {
 		label = "goroot " + label
-	} else if this.IsInGOPATH != "" {
-		label = "gopath " + label	
 	}
 
 	displayDir := this.Dir
@@ -566,7 +524,7 @@ func (this *Package) PrintScan() {
 		displayDir = strings.Replace(displayDir, GOROOT, "$GOROOT", 1)
 	}
 	var prefix string
-	if !this.IsInGOROOT && this.IsInGOPATH == "" {
+	if !this.IsInGOROOT {
 		prefix = fmt.Sprintf("in %s: ", displayDir)
 	}
 	fmt.Printf("%s%s \"%s\"%s\n", prefix, label, this.Target, bis)
@@ -764,7 +722,7 @@ func (this *Package) Build() (err os.Error) {
 		}
 		fmt.Printf("(in %s) building %s \"%s\"\n", this.Dir, which, this.Target)
 
-		if (Makefiles || this.MustUseMakefile) && this.HasMakefile {
+		if Makefiles && this.HasMakefile {
 			err = MakeBuild(this)
 		} else if this.IsCGo {
 			err = BuildCgoPackage(this)
@@ -845,9 +803,6 @@ func (this *Package) Test() (err os.Error) {
 		return
 	}
 
-	testSuite := &TestSuite{}
-	
-/*
 	fmt.Fprintf(file, "package main\n\n")
 
 	//fmt.Fprintf(file, "import \"%s\"\n", this.Target)
@@ -860,69 +815,25 @@ func (this *Package) Test() (err os.Error) {
 	}
 	fmt.Fprintf(file, "import \"testing\"\n")
 	fmt.Fprintf(file, "import __regexp__ \"regexp\"\n\n")
-	*/
-	testpkgMap := make(map[string]*TestPkg)
 
-	//fmt.Fprintf(file, "var tests = []testing.InternalTest{\n")
+	fmt.Fprintf(file, "var tests = []testing.InternalTest{\n")
 	for name, tests := range pkgtests {
-		if _, ok := testpkgMap[name]; !ok {
-			testpkgMap[name] = &TestPkg {
-			PkgAlias: name,
-			PkgName: name,
-			}
-		}
-
-		tpkg := testpkgMap[name]
-
 		for _, test := range tests {
-			/*
 			callName := name
 			if name == "main" {
 				callName = "__main__"
 			}
-			 */
-			tpkg.TestFuncs = append(tpkg.TestFuncs, test)
-			
-			//fmt.Fprintf(file, "\t{\"%s.%s\", %s.%s},\n", name, test, callName, test)
+			fmt.Fprintf(file, "\t{\"%s.%s\", %s.%s},\n", name, test, callName, test)
 		}
 	}
-	//fmt.Fprintf(file, "}\n")
+	fmt.Fprintf(file, "}\n")
 
-	//fmt.Fprintf(file, "var benchmarks = []testing.InternalBenchmark{\n")
+	fmt.Fprintf(file, "var benchmarks = []testing.InternalBenchmark{\n")
 	for name, benchmarks := range pkgbenchmarks {
-		if _, ok := testpkgMap[name]; !ok {
-			testpkgMap[name] = &TestPkg {
-			PkgAlias: name,
-			PkgName: name,
-			}
-		}
-
-		tpkg := testpkgMap[name]
-
 		for _, benchmark := range benchmarks {
-			/*
-			callName := name
-			if name == "main" {
-				callName = "__main__"
-			}*/
-			//fmt.Fprintf(file, "\t{\"%s.%s\", %s.%s},\n", name, benchmark, callName, benchmark)
-			tpkg.TestBenchmarks = append(tpkg.TestBenchmarks, benchmark)
+			fmt.Fprintf(file, "\t{\"%s.%s\", %s.%s},\n", name, benchmark, name, benchmark)
 		}
 	}
-
-	for _, tpkg := range testpkgMap {
-		if tpkg.PkgName == "main" {
-			tpkg.PkgAlias = "__main__"
-		}
-		testSuite.TestPkgs = append(testSuite.TestPkgs, tpkg)
-	}
-	
-	err = TestmainTemplate.Execute(file, testSuite)
-	if err != nil {
-		return
-	}
-
-	/*
 	fmt.Fprintf(file, "}\n\n")
 
 	fmt.Fprintf(file, "func main() {\n")
@@ -931,7 +842,7 @@ func (this *Package) Test() (err os.Error) {
 	fmt.Fprintf(file, "}\n")
 
 	file.Close()
-*/
+
 	err = BuildTest(this)
 
 	this.Stat()

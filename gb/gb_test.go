@@ -62,7 +62,3 @@ func TestGetRelative(t *testing.T) {
 	}
 	TestWindows = false
 }
-
-func BenchmarkX(b *testing.B) {
-	//do nothing
-}
